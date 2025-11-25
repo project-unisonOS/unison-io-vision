@@ -8,10 +8,16 @@ from typing import Any, Dict
 from unison_common.logging import configure_logging, log_json
 from unison_common.tracing_middleware import TracingMiddleware
 from unison_common.tracing import initialize_tracing, instrument_fastapi, instrument_httpx
+try:
+    from unison_common import BatonMiddleware
+except Exception:
+    BatonMiddleware = None
 from collections import defaultdict
 
 app = FastAPI(title="unison-io-vision")
 app.add_middleware(TracingMiddleware, service_name="unison-io-vision")
+if BatonMiddleware:
+    app.add_middleware(BatonMiddleware)
 
 logger = configure_logging("unison-io-vision")
 
@@ -65,11 +71,29 @@ def capture_image(request: Request, body: Dict[str, Any] = Body(...)):
     """
     _metrics["/vision/capture"] += 1
     event_id = request.headers.get("X-Event-ID")
+    baton = request.headers.get("X-Context-Baton")
+    person_id = body.get("person_id")
+    session_id = body.get("session_id")
     # 1x1 transparent PNG
     png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAqEBgX1Xw3wAAAAASUVORK5CYII="
     image_url = f"data:image/png;base64,{png_b64}"
-    log_json(logging.INFO, "vision_capture", service="unison-io-vision", event_id=event_id)
-    return {"ok": True, "image_url": image_url, "event_id": event_id}
+    log_json(
+        logging.INFO,
+        "vision_capture",
+        service="unison-io-vision",
+        event_id=event_id,
+        person_id=person_id,
+        session_id=session_id,
+    )
+    return {
+        "ok": True,
+        "image_url": image_url,
+        "event_id": event_id,
+        "person_id": person_id,
+        "session_id": session_id,
+        "baton": baton,
+        "received_at": time.time(),
+    }
 
 @app.post("/vision/describe")
 def describe_image(request: Request, body: Dict[str, Any] = Body(...)):
@@ -79,13 +103,32 @@ def describe_image(request: Request, body: Dict[str, Any] = Body(...)):
     """
     _metrics["/vision/describe"] += 1
     event_id = request.headers.get("X-Event-ID")
+    baton = request.headers.get("X-Context-Baton")
     image_url = body.get("image_url")
+    person_id = body.get("person_id")
+    session_id = body.get("session_id")
     if not isinstance(image_url, str) or not image_url.startswith("data:image/"):
         return {"ok": False, "error": "missing or invalid 'image_url' (must be data URI)", "event_id": event_id}
     # MVP: ignore image, return a placeholder description
     description = "This is a placeholder description of the image content."
-    log_json(logging.INFO, "vision_describe", service="unison-io-vision", event_id=event_id, description_len=len(description))
-    return {"ok": True, "description": description, "event_id": event_id}
+    log_json(
+        logging.INFO,
+        "vision_describe",
+        service="unison-io-vision",
+        event_id=event_id,
+        description_len=len(description),
+        person_id=person_id,
+        session_id=session_id,
+    )
+    return {
+        "ok": True,
+        "description": description,
+        "event_id": event_id,
+        "person_id": person_id,
+        "session_id": session_id,
+        "baton": baton,
+        "received_at": time.time(),
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8086)
