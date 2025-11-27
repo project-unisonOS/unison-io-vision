@@ -2,10 +2,14 @@
 
 Multimodal I/O service for vision: image capture and description stubs. Emits EventEnvelopes to the Orchestrator.
 
+## Status
+Optional (dev-mode) — stub vision gateway; used in devstack but can be disabled.
+
 ## Run locally
 
 - Python
   - pip install -r requirements.txt
+  - cp .env.example .env
   - python src/server.py
   - Open: http://localhost:8086/health
 
@@ -26,3 +30,10 @@ Multimodal I/O service for vision: image capture and description stubs. Emits Ev
 
 - Intended for Developer Mode; stub implementations.
 - Real vision models will be plugged in later.
+
+## Testing
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -c ../constraints.txt -r requirements.txt
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 OTEL_SDK_DISABLED=true python -m pytest
+```
