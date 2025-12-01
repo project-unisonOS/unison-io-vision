@@ -5,6 +5,8 @@ import json
 import time
 import base64
 from typing import Any, Dict
+from datetime import datetime, timezone
+import os
 from unison_common.logging import configure_logging, log_json
 from unison_common.tracing_middleware import TracingMiddleware
 from unison_common.tracing import initialize_tracing, instrument_fastapi, instrument_httpx
@@ -14,12 +16,17 @@ except Exception:
     BatonMiddleware = None
 from collections import defaultdict
 
-app = FastAPI(title="unison-io-vision")
-app.add_middleware(TracingMiddleware, service_name="unison-io-vision")
+APP_NAME = "unison-io-vision"
+ORCH_HOST = os.getenv("UNISON_ORCH_HOST", "orchestrator")
+ORCH_PORT = os.getenv("UNISON_ORCH_PORT", "8080")
+DEFAULT_PERSON_ID = os.getenv("UNISON_DEFAULT_PERSON_ID", "local-user")
+
+app = FastAPI(title=APP_NAME)
+app.add_middleware(TracingMiddleware, service_name=APP_NAME)
 if BatonMiddleware:
     app.add_middleware(BatonMiddleware)
 
-logger = configure_logging("unison-io-vision")
+logger = configure_logging(APP_NAME)
 
 # P0.3: Initialize tracing and instrument FastAPI/httpx
 initialize_tracing()
@@ -29,6 +36,50 @@ instrument_httpx()
 # Simple in-memory metrics
 _metrics = defaultdict(int)
 _start_time = time.time()
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
+def _http_post_json(host: str, port: str, path: str, payload: Dict[str, Any]) -> tuple[bool, int]:
+    try:
+        import httpx
+
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.post(f"http://{host}:{port}{path}", json=payload, headers={"Accept": "application/json"})
+        return resp.status_code in (200, 201, 202), resp.status_code
+    except Exception:
+        return False, 0
+
+
+def _emit_caps_report() -> None:
+    """Best-effort camera/display report at startup."""
+    caps = {
+        "camera": {"present": _env_flag("UNISON_HAS_CAMERA", True), "confidence": 0.6},
+        "display": {"present": _env_flag("UNISON_HAS_DISPLAY", False), "confidence": 0.6},
+        "sign_adapter": {"present": _env_flag("UNISON_HAS_SIGN_ADAPTER", False)},
+        "bci_adapter": {"present": _env_flag("UNISON_HAS_BCI_ADAPTER", False)},
+    }
+    envelope = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": APP_NAME,
+        "intent": "caps.report",
+        "payload": {"person_id": DEFAULT_PERSON_ID, "caps": caps},
+    }
+    ok, status = _http_post_json(ORCH_HOST, ORCH_PORT, "/event", envelope)
+    log_json(logging.INFO, "caps_report", service=APP_NAME, ok=ok, status=status, caps=caps)
+
+
+@app.on_event("startup")
+def _startup_caps():
+    try:
+        _emit_caps_report()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        log_json(logging.WARNING, "caps_report_failed", service=APP_NAME, error=str(exc))
 
 @app.get("/healthz")
 @app.get("/health")
