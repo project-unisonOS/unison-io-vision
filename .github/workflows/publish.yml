@@ -16,5 +16,5 @@ jobs:
     with:
       image_name: unison-io-vision
       domain: io-vision
-      service_port: "8080"
+      service_port: "8086"
     secrets: inherit
